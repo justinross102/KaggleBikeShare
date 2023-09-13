@@ -4,6 +4,7 @@
  
 # Libraries
 library(tidyverse)
+library(tidymodels)
 library(vroom)
 library(patchwork)
 
@@ -20,7 +21,9 @@ bikes$workingday <- as.factor(bikes$workingday)
 bikes$weather <- as.factor(bikes$weather)
 
 
-# scatter plot of datetime and temp ---------------------------------------
+# EDA Plots ---------------------------------------------------------------
+
+# scatter plot of datetime and temp
 
 plot_1 <- bikes %>% 
   ggplot(mapping = aes(x = temp, y = count)) +
@@ -28,7 +31,7 @@ plot_1 <- bikes %>%
   geom_smooth(se = F) +
   labs(title = "Temperature vs Count")
 
-# scatter plot of datetime and rentals (with temp) ------------------------
+# scatter plot of datetime and rentals (with temp)
 
 plot_2 <- bikes %>% 
   ggplot(mapping = aes(x = datetime, y = count, color = temp)) +
@@ -36,15 +39,14 @@ plot_2 <- bikes %>%
   labs(title = "Rentals over time",
        subtitle = "With Temperature")
 
-# Box plot of seasons and count -------------------------------------------
+# Box plot of seasons and count
 
 plot_3 <- bikes %>% 
   ggplot(mapping = aes(x = season, y = count)) +
   geom_boxplot() +
   labs(title = "Rentals Across the Seasons")
 
-
-# Violin Plot of Count and Workingday across all seasons ------------------
+# Violin Plot of Count and Workingday across all seasons
 
 plot_4 <- bikes %>% 
   ggplot(mapping = aes(x = workingday, y = count, color = season)) +
@@ -52,8 +54,11 @@ plot_4 <- bikes %>%
   coord_flip() +
   labs(title = "Number of Rentals on Workingdays vs Weekends")
 
-# Combined Plot -----------------------------------------------------------
-(plot_1 + plot_2) / (plot_3 + plot_4)
+# Combined Plot
+all_graphs <- (plot_1 + plot_2) / (plot_3 + plot_4)
+#ggsave("all_graphs.png")
+
+
 
 
 
