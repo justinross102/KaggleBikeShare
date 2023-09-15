@@ -19,9 +19,9 @@ bikes$holiday <- as.factor(bikes$holiday)
 bikes$workingday <- as.factor(bikes$workingday)
 bikes$weather <- as.factor(bikes$weather)
 
-# remove one day with weather == 4
-bikes <- bikes %>% 
-  filter(weather != 4)
+# turn 4s into 3s
+bikes$weather <- ifelse(bikes$weather == 4, 3, bikes$weather)
+
 
 # feature engineering -----------------------------------------------------
 
