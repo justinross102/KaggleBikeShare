@@ -124,3 +124,61 @@ vroom_write(x=penalized_preds, file="./penalized_predictions.csv", delim=",")
 # 1.00984
 
 
+# tuning ------------------------------------------------------------------
+
+# Penalized regression model
+penalized_model <- linear_reg(penalty=tune(),
+                         mixture=tune()) %>% #Set model and tuning
+  set_engine("glmnet") # Function to fit in R
+
+# Set Workflow
+penalized_wf <- workflow() %>%
+  add_recipe(my_recipe) %>%
+  add_model(penalized_model)
+
+
+# Grid of values to tune over
+tuning_grid <- grid_regular(penalty(),
+                            mixture(),
+                            levels = 5) ## L^2 total tuning possibilities
+
+# split data for cross validation
+folds <- vfold_cv(log_train, v = 5, repeats = 5)
+
+## Run the CV
+CV_results <- penalized_wf %>%
+  tune_grid(resamples=folds,
+            grid=tuning_grid,
+            metrics=metric_set(rmse, mae, rsq)) #Or leave metrics NULL
+
+# plot results
+collect_metrics(CV_results) %>% # Gathers metrics into DF
+  filter(.metric=="rmse") %>%
+  ggplot(data=., aes(x=penalty, y=mean, color=factor(mixture))) +
+  geom_line()
+
+# Find Best Tuning Parameters
+bestTune <- CV_results %>%
+  select_best("rmse")
+
+# Finalize the Workflow & fit it
+final_wf <- penalized_wf %>%
+  finalize_workflow(bestTune) %>%
+  fit(data=log_train)
+
+## Get Predictions for test set AND format for Kaggle
+penalized_tuned_preds <- predict(final_wf, new_data = test) %>% 
+  mutate(.pred=exp(.pred)) %>% 
+  bind_cols(., test) %>% 
+  select(datetime, .pred) %>% 
+  rename(count=.pred) %>% 
+  mutate(count=pmax(0, count)) %>%
+  mutate(datetime=as.character(format(datetime)))
+
+# Write predictions to CSV
+vroom_write(x=penalized_tuned_preds, file="./penalized_tuned_predictions.csv", delim=",")
+# 1.00955
+
+
+
+
