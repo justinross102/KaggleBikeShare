@@ -8,6 +8,7 @@ library(tidymodels)
 library(vroom)
 library(patchwork)
 library(poissonreg)
+library(rpart)
 
 # Read in the Data
 train <- vroom("./train.csv")
@@ -24,19 +25,20 @@ train <- train %>%
 log_train <- train %>%
   mutate(count=log(count))
 
-my_recipe <- recipe(count~., data=log_train) %>%
-  step_mutate(weather=ifelse(weather==4, 3, weather)) %>% #Relabel weather 4 to 3
-  step_mutate(weather=factor(weather, levels=1:3, labels=c("sunny", "mist", "rain"))) %>%
-  step_mutate(season=factor(season, levels=1:4, labels=c("spring", "summer", "fall", "winter"))) %>%
-  step_mutate(holiday=factor(holiday, levels=c(0,1), labels=c("no", "yes"))) %>%
-  step_mutate(workingday=factor(workingday,levels=c(0,1), labels=c("no", "yes"))) %>%
-  step_time(datetime, features="hour") %>%
+my_recipe <- recipe(count ~ ., data = log_train) %>%
+  step_mutate(weather=ifelse(weather == 4, 3, weather)) %>% # Relabel weather 4 to 3
+  step_num2factor(weather, levels = c("sun", "mist", "rain")) %>% 
+  step_num2factor(season, levels = c("spring", "summer", "fall", "winter")) %>% 
+  step_mutate(holiday = factor(holiday, levels = c(0,1), labels = c("no", "yes"))) %>%
+  step_mutate(workingday = factor(workingday,levels = c(0,1), labels = c("no", "yes"))) %>%
+  step_time(datetime, features="hour") %>% # pull out individual variables from datetime
   step_date(datetime, features="dow") %>% 
   step_date(datetime, features="month") %>% 
   step_date(datetime, features="year") %>% 
-  step_rm(datetime) %>% 
+  step_rm(datetime) %>% # don't need it anymore
   step_dummy(all_nominal_predictors()) %>% # make dummy variables
-  step_normalize(all_numeric_predictors()) # Make mean 0, sd=1
+  step_normalize(all_numeric_predictors()) %>%  # Make mean 0, sd=1
+  step_nzv(all_numeric_predictors())
   
 prepped_recipe <- prep(my_recipe)
 bake(prepped_recipe, new_data = log_train) #Make sure recipe work on train
@@ -121,7 +123,7 @@ penalized_preds <- predict(penalized_wf, new_data = test) %>%
 
  # Write predictions to CSV
 vroom_write(x=penalized_preds, file="./penalized_predictions.csv", delim=",")
-# 1.00984
+# 1.01029
 
 
 # tuning ------------------------------------------------------------------
@@ -132,10 +134,9 @@ penalized_model <- linear_reg(penalty=tune(),
   set_engine("glmnet") # Function to fit in R
 
 # Set Workflow
-penalized_wf <- workflow() %>%
+tuning_wf <- workflow() %>%
   add_recipe(my_recipe) %>%
   add_model(penalized_model)
-
 
 # Grid of values to tune over
 tuning_grid <- grid_regular(penalty(),
@@ -146,10 +147,10 @@ tuning_grid <- grid_regular(penalty(),
 folds <- vfold_cv(log_train, v = 5, repeats = 5)
 
 ## Run the CV
-CV_results <- penalized_wf %>%
+CV_results <- tuning_wf %>%
   tune_grid(resamples=folds,
             grid=tuning_grid,
-            metrics=metric_set(rmse, mae, rsq)) #Or leave metrics NULL
+            metrics=metric_set(rmse, mae)) #Or leave metrics NULL
 
 # plot results
 collect_metrics(CV_results) %>% # Gathers metrics into DF
@@ -162,7 +163,7 @@ bestTune <- CV_results %>%
   select_best("rmse")
 
 # Finalize the Workflow & fit it
-final_wf <- penalized_wf %>%
+final_wf <- tuning_wf %>%
   finalize_workflow(bestTune) %>%
   fit(data=log_train)
 
@@ -177,7 +178,70 @@ penalized_tuned_preds <- predict(final_wf, new_data = test) %>%
 
 # Write predictions to CSV
 vroom_write(x=penalized_tuned_preds, file="./penalized_tuned_predictions.csv", delim=",")
-# 1.00955
+# 1.00991
+
+
+# regression trees --------------------------------------------------------
+
+my_mod <- decision_tree(tree_depth = tune(),
+                        cost_complexity = tune(),
+                        min_n=tune()) %>% #Type of model
+  set_engine("rpart") %>% # Engine = What R function to use
+  set_mode("regression")
+
+my_tree_recipe <- recipe(count ~ ., data = log_train) %>% 
+  step_time(datetime, features=c("hour")) %>%
+  step_mutate(weather=ifelse(weather==4, 3, weather)) %>% 
+  step_num2factor(season, levels=c("spring", "summer", "fall", "winter")) %>%
+  step_num2factor(weather, levels=c("partly_cloudy", "misty", "rainy")) %>%
+  step_mutate(holiday=factor(holiday, levels=c(0,1), labels=c("no", "yes"))) %>%
+  step_mutate(workingday=factor(workingday,levels=c(0,1), labels=c("no", "yes"))) %>%
+  step_rm(datetime) %>%
+  step_dummy(all_nominal_predictors()) %>% 
+  step_nzv(all_numeric_predictors())
+
+# Create a workflow with model & recipe
+tree_wf <- workflow() %>%
+  add_recipe(my_tree_recipe) %>%
+  add_model(my_mod)
+
+## Set up grid of tuning values
+tuning_grid <- grid_regular(tree_depth(),
+                            cost_complexity(),
+                            min_n(),
+                            levels = 5) ## L^2 total tuning possibilities
+
+# Set up K-fold CV
+folds <- vfold_cv(log_train, v = 5, repeats = 5)
+
+tree_CV_results <- tree_wf %>%
+  tune_grid(resamples=folds,
+            grid=tuning_grid,
+            metrics=metric_set(rmse, mae)) #Or leave metrics NULL
+
+# Find best tuning parameters
+bestTune <- tree_CV_results %>%
+  select_best("rmse")
+
+# Finalize workflow and predict
+final_wf <- tree_wf %>%
+  finalize_workflow(bestTune) %>%
+  fit(data=log_train)
+
+# Predict for test data AND format for Kaggle
+reg_tree_preds <- predict(final_wf, new_data = test) %>% 
+  mutate(.pred=exp(.pred)) %>% 
+  bind_cols(., test) %>% 
+  select(datetime, .pred) %>% 
+  rename(count=.pred) %>% 
+  mutate(datetime=as.character(format(datetime)))
+
+# Write predictions to CSV
+vroom_write(x=reg_tree_preds, file="./reg_tree_predictions.csv", delim=",")
+# 0.49102
+
+
+
 
 
 
