@@ -20,6 +20,18 @@ test <- vroom("./test.csv")
 train <- train %>%
   select(-casual, - registered)
 
+# Function for predicting and formatting data for Kaggle Submission
+predict_and_format <- function(Workflow, New_data, Output_file) {
+  result <- predict(Workflow, New_data) %>%
+    mutate(.pred = exp(.pred)) %>%
+    bind_cols(., New_data) %>%
+    select(datetime, .pred) %>%
+    rename(count = .pred) %>%
+    mutate(datetime = as.character(format(datetime)))
+  
+  vroom::vroom_write(result, file = Output_file, delim = ",")
+}
+
 # feature engineering -----------------------------------------------------
 
 log_train <- train %>%
@@ -44,16 +56,15 @@ prepped_recipe <- prep(my_recipe)
 bake(prepped_recipe, new_data = log_train) #Make sure recipe work on train
 bake(prepped_recipe, new_data = test) #Make sure recipe works on test
 
-
 # linear regression -------------------------------------------------------
 
 # set up linear regression model
-my_mod <- linear_reg() %>% 
+lin_mod <- linear_reg() %>% 
   set_engine("lm")
 
 linear_workflow <- workflow() %>% 
   add_recipe(my_recipe) %>% 
-  add_model(my_mod) %>% 
+  add_model(lin_mod) %>% 
   fit(data = log_train)
 
 # Look at the fitted LM model
@@ -61,16 +72,7 @@ extract_fit_engine(linear_workflow) %>%
   summary()
 
 # Get Predictions for test set AND format for Kaggle submission
-predictions <- predict(linear_workflow, new_data = test) %>%
-  mutate(.pred=exp(.pred)) %>% # Back-transform the log to original scale
-  bind_cols(., test) %>% # Bind predictions with test data
-  select(datetime, .pred) %>% # only keep datetime and predictions
-  rename(count=.pred) %>% # rename pred to count (for Kaggle submission)
-  mutate(count=pmax(0, count)) %>% # round negatives up to zero
-  mutate(datetime=as.character(format(datetime))) # needed for Kaggle submission
-
-# Write predictions to CSV file
-vroom_write(x=predictions, file="./linear_predictions.csv", delim=",")
+predict_and_format(linear_workflow, test, "./linear_predictions.csv")
 # 1.01231
 
 
@@ -88,16 +90,7 @@ pois_workflow <- workflow() %>%
 extract_fit_engine(pois_workflow) %>%
   summary()
 
-# Get Predictions for test set AND format for Kaggle submission
-pois_predictions <- predict(pois_workflow, new_data = test) %>%
-  mutate(.pred=exp(.pred)) %>% 
-  bind_cols(., test) %>% 
-  select(datetime, .pred) %>% 
-  rename(count=.pred) %>% 
-  mutate(count=pmax(0, count)) %>% 
-  mutate(datetime=as.character(format(datetime))) 
-
-vroom_write(x = pois_predictions, file="./poisson_predictions.csv", delim=",")
+predict_and_format(pois_workflow, test, "./poisson_predictions.csv")
 # 1.05155
 
 
@@ -112,17 +105,7 @@ penalized_wf <- workflow() %>%
   add_model(penalized_model) %>%
   fit(data = log_train)
 
-## Get Predictions for test set AND format for Kaggle
-penalized_preds <- predict(penalized_wf, new_data = test) %>% 
-  mutate(.pred=exp(.pred)) %>% 
-  bind_cols(., test) %>% 
-  select(datetime, .pred) %>% 
-  rename(count=.pred) %>% 
-  mutate(count=pmax(0, count)) %>%
-  mutate(datetime=as.character(format(datetime)))
-
- # Write predictions to CSV
-vroom_write(x=penalized_preds, file="./penalized_predictions.csv", delim=",")
+predict_and_format(penalized_wf, test, "./penalized_predictions.csv")
 # 1.01029
 
 
@@ -163,21 +146,11 @@ bestTune <- CV_results %>%
   select_best("rmse")
 
 # Finalize the Workflow & fit it
-final_wf <- tuning_wf %>%
+tuning_wf <- tuning_wf %>%
   finalize_workflow(bestTune) %>%
   fit(data=log_train)
 
-## Get Predictions for test set AND format for Kaggle
-penalized_tuned_preds <- predict(final_wf, new_data = test) %>% 
-  mutate(.pred=exp(.pred)) %>% 
-  bind_cols(., test) %>% 
-  select(datetime, .pred) %>% 
-  rename(count=.pred) %>% 
-  mutate(count=pmax(0, count)) %>%
-  mutate(datetime=as.character(format(datetime)))
-
-# Write predictions to CSV
-vroom_write(x=penalized_tuned_preds, file="./penalized_tuned_predictions.csv", delim=",")
+predict_and_format(tuning_wf, test, "./penalized_tuned_predictions.csv")
 # 1.00991
 
 
@@ -209,7 +182,7 @@ tree_wf <- workflow() %>%
 tuning_grid <- grid_regular(tree_depth(),
                             cost_complexity(),
                             min_n(),
-                            levels = 5) ## L^2 total tuning possibilities
+                            levels = 6) ## L^2 total tuning possibilities
 
 # Set up K-fold CV
 folds <- vfold_cv(log_train, v = 5, repeats = 5)
@@ -228,17 +201,8 @@ final_wf <- tree_wf %>%
   finalize_workflow(bestTune) %>%
   fit(data=log_train)
 
-# Predict for test data AND format for Kaggle
-reg_tree_preds <- predict(final_wf, new_data = test) %>% 
-  mutate(.pred=exp(.pred)) %>% 
-  bind_cols(., test) %>% 
-  select(datetime, .pred) %>% 
-  rename(count=.pred) %>% 
-  mutate(datetime=as.character(format(datetime)))
-
-# Write predictions to CSV
-vroom_write(x=reg_tree_preds, file="./reg_tree_predictions.csv", delim=",")
-# 0.49102
+predict_and_format(final_wf, test, "./reg_tree_predictions.csv")
+# 0.48765
 
 
 
