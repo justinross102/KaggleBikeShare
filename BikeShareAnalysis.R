@@ -9,6 +9,7 @@ library(vroom)
 library(patchwork)
 library(poissonreg)
 library(rpart)
+library(ranger)
 
 # Read in the Data
 train <- vroom("./train.csv")
@@ -203,6 +204,47 @@ final_wf <- tree_wf %>%
 
 predict_and_format(final_wf, test, "./reg_tree_predictions.csv")
 # 0.48765
+
+# random forests ----------------------------------------------------------
+
+
+rf_mod <- rand_forest(mtry = tune(),
+                      min_n = tune(),
+                      trees = 500) %>% # 500 or 1000
+  set_engine("ranger") %>% 
+  set_mode("regression")
+  
+
+# create workflow with model and recipe
+## I'll try using my regression tree recipe first
+rf_wf <- workflow() %>%
+  add_recipe(my_tree_recipe) %>%
+  add_model(rf_mod)
+
+# grid of tuning values
+tuning_grid <- grid_regular(mtry(range = c(1, (ncol(log_train)-1))),
+                            min_n(),
+                            levels = 5) ## L^2 total tuning possibilities
+
+# set up K-fold CV
+folds <- vfold_cv(log_train, v = 5, repeats = 5)
+
+rf_CV_results <- rf_wf %>%
+  tune_grid(resamples = folds,
+            grid = tuning_grid,
+            metrics = metric_set(rmse, mae)) #Or leave metrics NULL
+
+# Find best tuning parameters
+bestTune <- rf_CV_results %>%
+  select_best("rmse")
+
+# Finalize workflow and predict
+final_wf <- rf_wf %>%
+  finalize_workflow(bestTune) %>%
+  fit(data=log_train)
+
+predict_and_format(final_wf, test, "./random_forest_predictions.csv")
+# 0.45347
 
 
 
