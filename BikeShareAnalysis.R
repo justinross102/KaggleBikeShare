@@ -10,6 +10,7 @@ library(patchwork)
 library(poissonreg)
 library(rpart)
 library(ranger)
+library(stacks)
 
 # Read in the Data
 train <- vroom("./train.csv")
@@ -247,8 +248,88 @@ predict_and_format(final_wf, test, "./random_forest_predictions.csv")
 # 0.45347
 
 
+# model stacking ----------------------------------------------------------
+
+## Split data for CV
+stacking_folds <- vfold_cv(train, v = 10, repeats=1)
+
+## Create a control grid
+untunedModel <- control_stack_grid() #If tuning over a grid
+tunedModel <- control_stack_resamples() #If not tuning a model
+
+## Penalized regression model
+preg_model <- linear_reg(penalty=tune(),
+                         mixture=tune()) %>% #Set model and tuning
+  set_engine("glmnet") # Function to fit in R
+
+## Set Workflow
+preg_wf <- workflow() %>%
+  add_recipe(my_recipe) %>%
+  add_model(preg_model)
+
+## Grid of values to tune over
+preg_tuning_grid <- grid_regular(penalty(),
+                                 mixture(),
+                                 levels = 5) ## L^2 total tuning possibilities
+
+## Run the CV
+preg_models <- preg_wf %>%
+  tune_grid(resamples=stacking_folds,
+            grid=preg_tuning_grid,
+            metrics=metric_set(rmse),
+            control = untunedModel) # including the control grid in the tuning ensures you can
+                                    # call on it later in the stacked model
+
+## Create other resampling objects with different ML algorithms to include in a stacked model, for example
+lin_reg <-
+  linear_reg() %>%
+  set_engine("lm")
+lin_reg_wf <-
+  workflow() %>%
+  add_model(lin_reg) %>%
+  add_recipe(my_recipe)
+lin_reg_model <-
+  fit_resamples(
+    lin_reg_wf,
+    resamples = stacking_folds,
+    metrics = metric_set(rmse),
+    control = tunedModel
+  )
+
+## Specify with models to include
+my_stack <- stacks() %>%
+  add_candidates(preg_models) %>%
+  add_candidates(lin_reg_model)
+
+## Fit the stacked model
+stack_mod <- my_stack %>%
+  blend_predictions() %>% # LASSO penalized regression meta-learner
+  fit_members() ## Fit the members to the dataset
+
+## If you want to build your own metalearner you'll have to do so manually
+## using
+stackData <- as_tibble(my_stack)
+
+## Use the stacked data to get a prediction
+stack_mod %>% predict(new_data=test)
 
 
+# random_forest_model <-
+#   tune_grid(
+#     rf_wf,
+#     grid = tuning_grid,
+#     resamples = folds,
+#     metrics = metric_set(rmse),
+#     control = untunedModel) # including this in my stack made the score go up
 
 
+# Get Predictions for test set AND format for Kaggle
+test_preds <- stack_mod %>% predict(new_data=test) %>%
+  bind_cols(., test) %>% #Bind predictions with test data
+  select(datetime, .pred) %>% #Just keep datetime and predictions
+  rename(count=.pred) %>% #rename pred to count (for submission to Kaggle)
+  mutate(count=pmax(0, count)) %>% #pointwise max of (0, prediction)
+  mutate(datetime=as.character(format(datetime))) #needed for right format to Kaggle
 
+# Write prediction file to CSV
+vroom_write(x=test_preds, file="./stacking_predictions.csv", delim=",")
