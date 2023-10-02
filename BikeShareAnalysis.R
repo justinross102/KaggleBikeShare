@@ -272,6 +272,11 @@ preg_tuning_grid <- grid_regular(penalty(),
                                  mixture(),
                                  levels = 5) ## L^2 total tuning possibilities
 
+reg_tree_tuning_grid <- grid_regular(tree_depth(),
+                                     cost_complexity(),
+                                     min_n(),
+                                     levels = 6) ## L^2 total tuning possibilities
+
 ## Run the CV
 preg_models <- preg_wf %>%
   tune_grid(resamples=stacking_folds,
@@ -296,10 +301,40 @@ lin_reg_model <-
     control = tunedModel
   )
 
+# add regression tree
+reg_tree <- decision_tree(tree_depth = tune(),
+                        cost_complexity = tune(),
+                        min_n=tune()) %>% #Type of model
+  set_engine("rpart") %>% # Engine = What R function to use
+  set_mode("regression")
+
+reg_tree_wf <-
+  workflow() %>%
+  add_model(reg_tree) %>%
+  add_recipe(my_tree_recipe)
+
+reg_tree_model <-
+  tune_grid(
+    reg_tree_wf,
+    grid = reg_tree_tuning_grid,
+    resamples = stacking_folds,
+    metrics = metric_set(rmse),
+    control = untunedModel)
+
+# random_forest_model <-
+#   tune_grid(
+#     rf_wf,
+#     grid = tuning_grid,
+#     resamples = folds,
+#     metrics = metric_set(rmse),
+#     control = untunedModel) # including this in my stack made the score go up
+
+
 ## Specify with models to include
 my_stack <- stacks() %>%
   add_candidates(preg_models) %>%
-  add_candidates(lin_reg_model)
+  add_candidates(lin_reg_model) %>% 
+  add_candidates(reg_tree_model)
 
 ## Fit the stacked model
 stack_mod <- my_stack %>%
@@ -314,15 +349,6 @@ stackData <- as_tibble(my_stack)
 stack_mod %>% predict(new_data=test)
 
 
-# random_forest_model <-
-#   tune_grid(
-#     rf_wf,
-#     grid = tuning_grid,
-#     resamples = folds,
-#     metrics = metric_set(rmse),
-#     control = untunedModel) # including this in my stack made the score go up
-
-
 # Get Predictions for test set AND format for Kaggle
 test_preds <- stack_mod %>% predict(new_data=test) %>%
   bind_cols(., test) %>% #Bind predictions with test data
@@ -333,3 +359,4 @@ test_preds <- stack_mod %>% predict(new_data=test) %>%
 
 # Write prediction file to CSV
 vroom_write(x=test_preds, file="./stacking_predictions.csv", delim=",")
+# 0.74447
