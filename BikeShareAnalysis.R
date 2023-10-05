@@ -53,7 +53,7 @@ my_recipe <- recipe(count ~ ., data = log_train) %>%
   step_dummy(all_nominal_predictors()) %>% # make dummy variables
   step_normalize(all_numeric_predictors()) %>%  # Make mean 0, sd=1
   step_nzv(all_numeric_predictors())
-  
+
 prepped_recipe <- prep(my_recipe)
 bake(prepped_recipe, new_data = log_train) #Make sure recipe work on train
 bake(prepped_recipe, new_data = test) #Make sure recipe works on test
@@ -115,7 +115,7 @@ predict_and_format(penalized_wf, test, "./penalized_predictions.csv")
 
 # Penalized regression model
 penalized_model <- linear_reg(penalty=tune(),
-                         mixture=tune()) %>% #Set model and tuning
+                              mixture=tune()) %>% #Set model and tuning
   set_engine("glmnet") # Function to fit in R
 
 # Set Workflow
@@ -211,10 +211,10 @@ predict_and_format(final_wf, test, "./reg_tree_predictions.csv")
 
 rf_mod <- rand_forest(mtry = tune(),
                       min_n = tune(),
-                      trees = 500) %>% # 500 or 1000
+                      trees = 1000) %>% # 500 or 1000
   set_engine("ranger") %>% 
   set_mode("regression")
-  
+
 
 # create workflow with model and recipe
 ## I'll try using my regression tree recipe first
@@ -245,7 +245,7 @@ final_wf <- rf_wf %>%
   fit(data=log_train)
 
 predict_and_format(final_wf, test, "./random_forest_predictions.csv")
-# 0.45347
+# 0.45272
 
 
 # model stacking ----------------------------------------------------------
@@ -283,7 +283,7 @@ preg_models <- preg_wf %>%
             grid=preg_tuning_grid,
             metrics=metric_set(rmse),
             control = untunedModel) # including the control grid in the tuning ensures you can
-                                    # call on it later in the stacked model
+# call on it later in the stacked model
 
 ## Create other resampling objects with different ML algorithms to include in a stacked model, for example
 lin_reg <-
@@ -303,8 +303,8 @@ lin_reg_model <-
 
 # add regression tree
 reg_tree <- decision_tree(tree_depth = tune(),
-                        cost_complexity = tune(),
-                        min_n=tune()) %>% #Type of model
+                          cost_complexity = tune(),
+                          min_n=tune()) %>% #Type of model
   set_engine("rpart") %>% # Engine = What R function to use
   set_mode("regression")
 
@@ -360,3 +360,51 @@ test_preds <- stack_mod %>% predict(new_data=test) %>%
 # Write prediction file to CSV
 vroom_write(x=test_preds, file="./stacking_predictions.csv", delim=",")
 # 0.74447
+
+
+# bart --------------------------------------------------------------------
+
+# create bart model and workflow
+bart_model <- bart(trees = tune(),
+                   prior_terminal_node_coef = tune(),
+                   prior_terminal_node_expo = tune()) %>% 
+  set_engine("dbarts") %>% 
+  set_mode("regression")
+
+bart_workflow <-
+  workflow(my_recipe) %>%
+  add_model(bart_model)
+
+# create tuning grid
+tuning_grid <- grid_regular(trees(),
+                            prior_terminal_node_coef(),
+                            prior_terminal_node_expo(),
+                            levels = 5)
+
+# cross validation
+cross_validation <- vfold_cv(data = log_train, v = 5, repeats = 1)
+
+cross_validation_results <- bart_workflow %>%
+  tune_grid(resamples = cross_validation,
+    grid = 3,
+    metrics=metric_set(rmse))
+
+# Get the best hyperparameters
+best_params <- cross_validation_results %>%
+  select_best('rmse')
+
+# use the best model
+final_workflow_bart <- bart_workflow %>%
+  finalize_workflow(best_params) %>%
+  fit(data=log_train)
+
+# predict and format for Kaggle
+predict_and_format(final_workflow_bart, test, "./bart_predictions.csv")
+# 0.39277
+
+
+
+
+
+
+
