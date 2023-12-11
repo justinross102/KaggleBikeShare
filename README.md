@@ -1,2 +1,3 @@
 # KaggleBikeShare
-Code for the Kaggle bike share competition
+This repository contains my code and submission files for the Kaggle Bike 
+Share competition.
